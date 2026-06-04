@@ -157,7 +157,10 @@ jobs:
             # produces a pip-less venv. Guarantee the tooling first.
             echo "Ensuring python venv tooling"
             if ! dpkg -s python3-venv >/dev/null 2>&1 || ! dpkg -s python3-pip >/dev/null 2>&1; then
-              sudo apt-get update -qq
+              # A broken third-party APT repo (e.g. Caddy's cloudsmith key) makes
+              # `apt-get update` exit non-zero; don't let that abort the deploy.
+              # python3-venv/pip come from the main Ubuntu archive, which is fine.
+              sudo apt-get update -qq || true
               sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv python3-pip
             fi
             echo "Updating pdf-parser source"
