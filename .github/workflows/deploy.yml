@@ -28,7 +28,7 @@ env:
   # ── Healthcheck (public, through the api-gateway) ───────────────────────────
   # Requires a gateway route proxying this path to thothai's 127.0.0.1:8000/health.
   # See "api-gateway integration" in docs/Deployment Guide.md.
-  HEALTHCHECK_URL: https://api.mikhailjbs.my.id/thothai/health
+  HEALTHCHECK_URL: https://api.katgen.pro/thothai/health
 
 jobs:
   deploy:
