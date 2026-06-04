@@ -44,5 +44,9 @@ type Event struct {
 	Status   string          `json:"status,omitempty"`
 	Progress int             `json:"progress,omitempty"`
 	Summary  string          `json:"summary,omitempty"`
-	Error    string          `json:"error,omitempty"`
+	// Result carries the raw tool payload (same bytes persisted to
+	// messages.tool_result) so the client can render rich result cards live,
+	// without waiting for a refetch of the persisted conversation.
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }

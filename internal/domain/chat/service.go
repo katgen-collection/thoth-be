@@ -156,7 +156,7 @@ func (s *Service) SendMessage(ctx context.Context, conversationID, userID, conte
 				continue
 			}
 
-			emit(Event{Type: "tool_result", Tool: call.Name, Summary: outcome.Summary})
+			emit(Event{Type: "tool_result", Tool: call.Name, Summary: outcome.Summary, Result: outcome.Raw})
 			msgs = append(msgs, ai.Message{Role: RoleTool, ToolCallID: call.ID, Content: outcome.LLMContent})
 			_, _ = s.repo.AddMessage(ctx, Message{
 				ConversationID: conv.ID, Role: RoleTool, Content: outcome.Summary,
