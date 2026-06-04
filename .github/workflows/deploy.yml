@@ -1,0 +1,276 @@
+name: Deploy Thothai Backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: thothai-be-deploy
+  cancel-in-progress: true
+
+env:
+  # ── Go binary (one binary, run as two systemd units: api + worker) ──────────
+  BINARY_NAME: thothai
+  BUILD_DIR: build
+  BUILD_TARGET: ./cmd/thothai
+  REMOTE_BIN_PATH: /usr/local/bin/thothai
+  API_SERVICE_NAME: thothai-api
+  WORKER_SERVICE_NAME: thothai-worker
+  # ── Shared env file for api + worker ────────────────────────────────────────
+  REMOTE_ENV_DIR: /etc/thothai
+  REMOTE_ENV_FILE: /etc/thothai/service.env
+  # ── pdf-parser Python sidecar ───────────────────────────────────────────────
+  PDF_SERVICE_NAME: pdf-parser
+  PDF_REMOTE_DIR: /opt/thothai/pdf-parser
+  PDF_ENV_FILE: /etc/thothai/pdf-parser.env
+  # ── Healthcheck (public, through the api-gateway) ───────────────────────────
+  # Requires a gateway route proxying this path to thothai's 127.0.0.1:8000/health.
+  # See "api-gateway integration" in docs/Deployment Guide.md.
+  HEALTHCHECK_URL: https://api.mikhailjbs.my.id/thothai/health
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build binary
+        run: |
+          mkdir -p "${{ env.BUILD_DIR }}"
+          go build -ldflags "-s -w" -o "${{ env.BUILD_DIR }}/${{ env.BINARY_NAME }}" "${{ env.BUILD_TARGET }}"
+
+      - name: Clean up previous uploads
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: rm -rf /tmp/${{ env.BINARY_NAME }} /tmp/pdf-parser
+
+      - name: Upload binary to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "${{ env.BUILD_DIR }}/${{ env.BINARY_NAME }}"
+          target: "/tmp"
+          strip_components: 1
+          overwrite: true
+
+      - name: Upload pdf-parser source to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # Ships main.py + requirements.txt (NOT .env / .venv) → /tmp/pdf-parser/
+          source: "pdf-parser/main.py,pdf-parser/requirements.txt"
+          target: "/tmp"
+          overwrite: true
+
+      - name: Deploy and restart services
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            BINARY_NAME="${{ env.BINARY_NAME }}"
+            REMOTE_BIN="${{ env.REMOTE_BIN_PATH }}"
+            API_SERVICE="${{ env.API_SERVICE_NAME }}"
+            WORKER_SERVICE="${{ env.WORKER_SERVICE_NAME }}"
+            PDF_SERVICE="${{ env.PDF_SERVICE_NAME }}"
+            ENV_DIR="${{ env.REMOTE_ENV_DIR }}"
+            ENV_FILE="${{ env.REMOTE_ENV_FILE }}"
+            PDF_DIR="${{ env.PDF_REMOTE_DIR }}"
+            PDF_ENV_FILE="${{ env.PDF_ENV_FILE }}"
+            SERVICE_USER="${{ secrets.VPS_SERVICE_USER }}"
+            SERVICE_GROUP="${{ secrets.VPS_SERVICE_GROUP }}"
+            SWAP_FILE="/swapfile"
+
+            if [ -z "$SERVICE_USER" ]; then SERVICE_USER="svc"; fi
+            if [ -z "$SERVICE_GROUP" ]; then SERVICE_GROUP="$SERVICE_USER"; fi
+
+            # ── Service account ─────────────────────────────────────────────────
+            echo "Ensuring service account $SERVICE_USER exists"
+            if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+              sudo useradd --system --home "$ENV_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+            fi
+            if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+              sudo groupadd --system "$SERVICE_GROUP"
+            fi
+            sudo usermod -a -G "$SERVICE_GROUP" "$SERVICE_USER" >/dev/null 2>&1 || true
+
+            # ── Swap (mirrors the other ecosystem services) ─────────────────────
+            echo "Ensuring swap availability"
+            if ! sudo swapon --show | grep -q "$SWAP_FILE"; then
+              sudo fallocate -l 2G "$SWAP_FILE"
+              sudo chmod 600 "$SWAP_FILE"
+              sudo mkswap "$SWAP_FILE"
+              sudo swapon "$SWAP_FILE"
+              if ! sudo grep -q "$SWAP_FILE" /etc/fstab; then
+                echo "$SWAP_FILE none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+              fi
+            fi
+
+            # ── Install Go binary ───────────────────────────────────────────────
+            echo "Installing binary"
+            sudo install -m 755 "/tmp/${BINARY_NAME}" "$REMOTE_BIN"
+
+            # ── Env files (created empty if absent; CI NEVER overwrites them) ────
+            echo "Preparing environment files"
+            sudo mkdir -p "$ENV_DIR"
+            if [ ! -f "$ENV_FILE" ]; then
+              echo "# Populate before first start — see docs/Deployment Guide.md" | sudo tee "$ENV_FILE" >/dev/null
+            fi
+            sudo chmod 640 "$ENV_FILE"
+            sudo chown "$SERVICE_USER:$SERVICE_GROUP" "$ENV_FILE"
+            if [ ! -f "$PDF_ENV_FILE" ]; then
+              echo "# OPENROUTER_API_KEY=... (optional OCR fallback)" | sudo tee "$PDF_ENV_FILE" >/dev/null
+            fi
+            sudo chmod 640 "$PDF_ENV_FILE"
+            sudo chown "$SERVICE_USER:$SERVICE_GROUP" "$PDF_ENV_FILE"
+
+            # ── pdf-parser sidecar: source + virtualenv ─────────────────────────
+            echo "Updating pdf-parser source"
+            sudo mkdir -p "$PDF_DIR"
+            sudo cp /tmp/pdf-parser/main.py /tmp/pdf-parser/requirements.txt "$PDF_DIR/"
+            if [ ! -d "$PDF_DIR/.venv" ]; then
+              echo "Creating pdf-parser virtualenv"
+              sudo python3 -m venv "$PDF_DIR/.venv"
+            fi
+            echo "Installing pdf-parser dependencies"
+            sudo "$PDF_DIR/.venv/bin/pip" install --upgrade pip --quiet
+            sudo "$PDF_DIR/.venv/bin/pip" install -r "$PDF_DIR/requirements.txt" --quiet
+            sudo chown -R "$SERVICE_USER:$SERVICE_GROUP" /opt/thothai
+
+            # ── systemd units ───────────────────────────────────────────────────
+            echo "Writing systemd unit: ${API_SERVICE}"
+            sudo tee "/etc/systemd/system/${API_SERVICE}.service" >/dev/null <<EOF
+            [Unit]
+            Description=Thothai API
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            User=$SERVICE_USER
+            Group=$SERVICE_GROUP
+            WorkingDirectory=$ENV_DIR
+            EnvironmentFile=$ENV_FILE
+            ExecStart=$REMOTE_BIN --mode=serve
+            Restart=on-failure
+            RestartSec=5
+            LimitNOFILE=65535
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            echo "Writing systemd unit: ${WORKER_SERVICE}"
+            sudo tee "/etc/systemd/system/${WORKER_SERVICE}.service" >/dev/null <<EOF
+            [Unit]
+            Description=Thothai Worker
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            User=$SERVICE_USER
+            Group=$SERVICE_GROUP
+            WorkingDirectory=$ENV_DIR
+            EnvironmentFile=$ENV_FILE
+            ExecStart=$REMOTE_BIN --mode=worker
+            Restart=on-failure
+            RestartSec=5
+            LimitNOFILE=65535
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            # pdf-parser is hardened: it parses untrusted PDFs (RCE/DoS surface).
+            echo "Writing systemd unit: ${PDF_SERVICE}"
+            sudo tee "/etc/systemd/system/${PDF_SERVICE}.service" >/dev/null <<EOF
+            [Unit]
+            Description=Thothai PDF Parser
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            User=$SERVICE_USER
+            Group=$SERVICE_GROUP
+            WorkingDirectory=$PDF_DIR
+            EnvironmentFile=$PDF_ENV_FILE
+            ExecStart=$PDF_DIR/.venv/bin/gunicorn main:app --bind 127.0.0.1:5001 --workers 2 --timeout 30
+            Restart=on-failure
+            RestartSec=5
+            NoNewPrivileges=yes
+            PrivateTmp=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            MemoryMax=512M
+            CPUQuota=80%
+            RestrictAddressFamilies=AF_INET AF_INET6
+            LimitNPROC=64
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            # ── Migrations (idempotent; run as the service user with env loaded) ─
+            echo "Running database migrations"
+            sudo systemd-run --quiet --pipe --wait \
+              --uid="$SERVICE_USER" --gid="$SERVICE_GROUP" \
+              -p "EnvironmentFile=$ENV_FILE" \
+              "$REMOTE_BIN" --mode=migrate
+
+            # ── Reload + (re)start all three units ──────────────────────────────
+            echo "Reloading and restarting services"
+            sudo systemctl daemon-reload
+            sudo systemctl enable "${API_SERVICE}.service" "${WORKER_SERVICE}.service" "${PDF_SERVICE}.service"
+            sudo systemctl restart "${PDF_SERVICE}.service"
+            sudo systemctl restart "${WORKER_SERVICE}.service"
+            sudo systemctl restart "${API_SERVICE}.service"
+
+            sudo systemctl status "${API_SERVICE}.service" --no-pager || true
+            sudo systemctl status "${WORKER_SERVICE}.service" --no-pager || true
+            sudo systemctl status "${PDF_SERVICE}.service" --no-pager || true
+
+            echo "Deployment completed"
+
+      - name: Verify service health
+        run: |
+          echo "Probing ${{ env.HEALTHCHECK_URL }}"
+          for attempt in $(seq 1 10); do
+            if curl -fsS "${{ env.HEALTHCHECK_URL }}" >/dev/null; then
+              echo "Healthcheck passed"
+              exit 0
+            fi
+            echo "Attempt ${attempt} failed, waiting before retry"
+            sleep 3
+          done
+          echo "Service failed healthcheck" >&2
+          exit 1

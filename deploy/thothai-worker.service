@@ -1,0 +1,17 @@
+[Unit]
+Description=Thothai Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=svc
+WorkingDirectory=/etc/thothai
+EnvironmentFile=/etc/thothai/service.env
+ExecStart=/usr/local/bin/thothai --mode=worker
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

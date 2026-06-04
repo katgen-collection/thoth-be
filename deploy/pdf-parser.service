@@ -1,0 +1,27 @@
+[Unit]
+Description=Thothai PDF Parser
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=svc
+WorkingDirectory=/opt/thothai/pdf-parser
+ExecStart=/opt/thothai/pdf-parser/.venv/bin/gunicorn main:app \
+    --bind 127.0.0.1:5001 --workers 2 --timeout 30
+EnvironmentFile=/etc/thothai/pdf-parser.env
+Restart=on-failure
+RestartSec=5
+
+# Sandbox hardening — parses untrusted PDFs (PDF-bomb / parser-CVE backstop)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryMax=512M
+CPUQuota=80%
+RestrictAddressFamilies=AF_INET AF_INET6
+LimitNPROC=64
+
+[Install]
+WantedBy=multi-user.target
