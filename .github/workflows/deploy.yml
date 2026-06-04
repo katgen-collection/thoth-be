@@ -153,11 +153,21 @@ jobs:
             sudo chown "$SERVICE_USER:$SERVICE_GROUP" "$PDF_ENV_FILE"
 
             # ── pdf-parser sidecar: source + virtualenv ─────────────────────────
+            # Ubuntu ships python3 without ensurepip, so a bare `python3 -m venv`
+            # produces a pip-less venv. Guarantee the tooling first.
+            echo "Ensuring python venv tooling"
+            if ! dpkg -s python3-venv >/dev/null 2>&1 || ! dpkg -s python3-pip >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv python3-pip
+            fi
             echo "Updating pdf-parser source"
             sudo mkdir -p "$PDF_DIR"
             sudo cp /tmp/pdf-parser/main.py /tmp/pdf-parser/requirements.txt "$PDF_DIR/"
-            if [ ! -d "$PDF_DIR/.venv" ]; then
+            # Recreate when missing OR broken (pip never bootstrapped) — a plain
+            # directory check would skip a half-built venv forever.
+            if [ ! -x "$PDF_DIR/.venv/bin/pip" ]; then
               echo "Creating pdf-parser virtualenv"
+              sudo rm -rf "$PDF_DIR/.venv"
               sudo python3 -m venv "$PDF_DIR/.venv"
             fi
             echo "Installing pdf-parser dependencies"
