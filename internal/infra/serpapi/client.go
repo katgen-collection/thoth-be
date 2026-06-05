@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +14,11 @@ import (
 )
 
 const baseURL = "https://serpapi.com/search"
+
+// defaultCountry is the Google `gl` used when none is configured. Without a
+// country code Google geolocates the request to the US and city-scoped queries
+// (e.g. "Jakarta") return zero results.
+const defaultCountry = "id"
 
 var employmentTypeMap = map[string]string{
 	"full_time": "FULLTIME",
@@ -29,14 +35,21 @@ var experienceMap = map[string]string{
 
 // Client queries SerpAPI's Google Jobs engine.
 type Client struct {
-	apiKey string
-	http   *http.Client
+	apiKey  string
+	country string // Google `gl` country code, e.g. "id"
+	http    *http.Client
 }
 
-func New(apiKey string) *Client {
+// New builds a client. country is the Google `gl` code; empty falls back to
+// defaultCountry ("id").
+func New(apiKey, country string) *Client {
+	if country == "" {
+		country = defaultCountry
+	}
 	return &Client{
-		apiKey: apiKey,
-		http:   &http.Client{Timeout: 30 * time.Second},
+		apiKey:  apiKey,
+		country: country,
+		http:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -60,6 +73,7 @@ func (c *Client) Fetch(ctx context.Context, params search.ExtractedParams) ([]ma
 	qp.Set("q", strings.TrimSpace(q))
 	qp.Set("api_key", c.apiKey)
 	qp.Set("hl", "en")
+	qp.Set("gl", c.country)
 	qp.Set("num", "30")
 
 	if v, ok := employmentTypeMap[params.EmploymentType]; ok {
@@ -84,11 +98,29 @@ func (c *Client) Fetch(ctx context.Context, params search.ExtractedParams) ([]ma
 		return nil, fmt.Errorf("serpapi returned status %d", resp.StatusCode)
 	}
 
+	// SerpAPI returns HTTP 200 even when Google served no jobs, signalling it via
+	// `error` / `search_information.jobs_results_state`. Decode those so an empty
+	// result isn't silently indistinguishable from an API problem.
 	var body struct {
-		JobsResults []map[string]any `json:"jobs_results"`
+		JobsResults       []map[string]any `json:"jobs_results"`
+		Error             string           `json:"error"`
+		SearchInformation struct {
+			JobsResultsState string `json:"jobs_results_state"`
+		} `json:"search_information"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("decode serpapi response: %w", err)
+	}
+
+	if len(body.JobsResults) == 0 && body.Error != "" {
+		// "Google hasn't returned any results for this query." is a benign empty
+		// result, not a failure — log it for visibility and return zero jobs.
+		slog.Info("serpapi returned no jobs",
+			"query", strings.TrimSpace(q),
+			"gl", c.country,
+			"serp_error", body.Error,
+			"state", body.SearchInformation.JobsResultsState)
+		return []map[string]any{}, nil
 	}
 
 	return body.JobsResults, nil

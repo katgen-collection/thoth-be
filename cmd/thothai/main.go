@@ -79,7 +79,7 @@ func build(ctx context.Context, cfg *config.Config) appDeps {
 	}
 
 	deepseek := ai.NewDeepSeek(cfg.DeepSeekAPIKey, cfg.DeepSeekBaseURL)
-	serp := serpapi.New(cfg.SerpAPIKey)
+	serp := serpapi.New(cfg.SerpAPIKey, cfg.SerpAPICountry)
 
 	store := storage.NewS3(storage.S3Config{
 		Endpoint:        cfg.StorageEndpoint,

@@ -77,9 +77,23 @@ func NewSearchJobsTool(searchSvc *search.Service) Tool {
 
 			raw, _ := json.Marshal(jobs)
 			summary := fmt.Sprintf("Ditemukan %d posisi relevan", len(jobs))
+
+			llmContent := fmt.Sprintf("%s. Hasil pencarian (JSON):\n%s", summary, raw)
+			if len(jobs) == 0 {
+				// Steer the model to broaden and retry instead of telling the user
+				// the "database is empty" (these results are live Google Jobs).
+				llmContent = fmt.Sprintf(
+					"The live job search for %q returned no results. This is a real-time search, not a fixed database. "+
+						"Try ONE more search_jobs call with a broader query — drop the seniority/keywords, widen the "+
+						"location to the country or 'remote', or use a more general role title. Only if a broadened "+
+						"search also returns nothing should you tell the user no matches were found right now.",
+					in.Query,
+				)
+			}
+
 			return ToolOutcome{
 				Summary:     summary,
-				LLMContent:  fmt.Sprintf("%s. Hasil pencarian (JSON):\n%s", summary, raw),
+				LLMContent:  llmContent,
 				Raw:         raw,
 				SearchJobID: jobID,
 			}, nil

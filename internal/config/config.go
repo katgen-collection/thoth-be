@@ -27,6 +27,9 @@ type Config struct {
 
 	// External
 	SerpAPIKey string
+	// Google country (gl) for SerpAPI job search. Without it Google geolocates
+	// requests to the US and city-scoped queries (e.g. "Jakarta") return nothing.
+	SerpAPICountry string
 
 	// pdf-parser service (loopback)
 	PDFParserURL string
@@ -59,7 +62,8 @@ func Load() *Config {
 		DeepSeekAPIKey:  getEnv("DEEPSEEK_API_KEY", ""),
 		DeepSeekBaseURL: getEnv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
 
-		SerpAPIKey: getEnv("SERPAPI_KEY", ""),
+		SerpAPIKey:     getEnv("SERPAPI_KEY", ""),
+		SerpAPICountry: getEnv("SERPAPI_GL", "id"),
 
 		PDFParserURL: getEnv("PDF_PARSER_URL", "http://127.0.0.1:5001"),
 
