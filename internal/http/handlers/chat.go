@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
@@ -15,6 +16,11 @@ import (
 	"github.com/katgen/thothai/internal/domain/chat"
 	"github.com/katgen/thothai/internal/infra/middleware"
 )
+
+// maxMessageChars bounds a single chat message. Generous enough to paste a long
+// job description, but a hard ceiling against oversized injection / cost-abuse
+// payloads from the chat UI.
+const maxMessageChars = 16000
 
 type ChatHandler struct {
 	svc *chat.Service
@@ -103,6 +109,12 @@ func (h *ChatHandler) sendMessage(c *fiber.Ctx) error {
 	req.Content = strings.TrimSpace(req.Content)
 	if req.Content == "" {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "content must not be empty")
+	}
+	// Bound the input: enough to paste a long job description, but a hard cap so a
+	// single message can't be stuffed with an oversized prompt-injection / cost
+	// payload. Count runes so multibyte text isn't unfairly clipped.
+	if utf8.RuneCountInString(req.Content) > maxMessageChars {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "message is too long")
 	}
 
 	// Verify ownership before opening the stream so errors return proper status.
