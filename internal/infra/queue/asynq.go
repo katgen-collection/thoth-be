@@ -2,6 +2,7 @@ package queue
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
@@ -39,6 +40,12 @@ func NewServer(redisURL string) (*asynq.Server, error) {
 	srv := asynq.NewServer(opt, asynq.Config{
 		Concurrency: 10,
 		Queues:      map[string]int{"default": 1},
+		// Stretch the background loops well past their chatty defaults (health
+		// ~15s, delayed-task forwarder ~5s). Our tasks are enqueued for immediate
+		// run, so a slower forwarder only delays the occasional retry — and it
+		// drastically cuts idle Redis traffic (this is what drained Upstash).
+		HealthCheckInterval:      60 * time.Second,
+		DelayedTaskCheckInterval: 60 * time.Second,
 	})
 	return srv, nil
 }
