@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/katgen/thothai/internal/infra/ai"
 	"github.com/katgen/thothai/internal/infra/fetch"
@@ -58,7 +59,25 @@ func (s *Service) AnalyzeURL(ctx context.Context, url string) (ai.JobAnalysis, e
 	if err != nil {
 		return ai.JobAnalysis{}, fmt.Errorf("fetch job url: %w", err)
 	}
-	text := fetch.HTMLToText(res.Body, maxJobPageChars)
+	// Many job boards (LinkedIn especially) answer automated requests with a
+	// block/login page and a non-2xx status. Surface that as an error so the
+	// caller can fall back to saving the URL manually instead of extracting
+	// garbage from a wall page.
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ai.JobAnalysis{}, fmt.Errorf("job site returned status %d (likely blocking automated access)", res.StatusCode)
+	}
+	// Prefer structured data (meta/OpenGraph/JSON-LD) — modern job boards render
+	// the body with JS but still emit these for SEO, so they carry the role even
+	// when the visible text is sparse. Fall back to / augment with body text.
+	structured := fetch.ExtractStructured(res.Body)
+	body := fetch.HTMLToText(res.Body, maxJobPageChars)
+	text := strings.TrimSpace(structured + "\n\n" + body)
+	if len(text) < 60 {
+		return ai.JobAnalysis{}, fmt.Errorf("job page had no readable content (likely requires login or JavaScript)")
+	}
+	if maxJobPageChars > 0 && len(text) > maxJobPageChars {
+		text = text[:maxJobPageChars]
+	}
 	analysis, err := s.ai.AnalyzeJobPosting(ctx, text)
 	if err != nil {
 		return ai.JobAnalysis{}, err

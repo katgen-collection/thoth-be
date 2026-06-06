@@ -97,6 +97,11 @@ type Result struct {
 	FinalURL    string
 }
 
+// browserUA is a realistic desktop User-Agent. Many job boards reject requests
+// with an empty or obviously-automated UA, so we present a normal browser one.
+const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+	"(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
 // Get fetches rawURL with all SSRF protections applied.
 func (f *Fetcher) Get(ctx context.Context, rawURL string) (*Result, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -106,6 +111,11 @@ func (f *Fetcher) Get(ctx context.Context, rawURL string) (*Result, error) {
 	if !isAllowedScheme(req.URL.Scheme) {
 		return nil, ErrBadScheme
 	}
+
+	// Present as a normal browser so job boards serve the real page.
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9,id;q=0.8")
 
 	resp, err := f.client.Do(req)
 	if err != nil {
