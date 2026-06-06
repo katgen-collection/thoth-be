@@ -46,8 +46,17 @@ type Config struct {
 	StorageSecretAccessKey string
 	StoragePresignTTL      time.Duration
 
-	MaxCVFileSizeMB  int
+	MaxCVFileSizeMB   int
 	MaxUploadsPerUser int
+
+	// Rate limiting (Redis-backed). Per-minute caps. IP/User are coarse abuse
+	// guards; Chat/Search are tighter because each call drives paid work (LLM +
+	// SerpAPI) and is the basis for future paid tiers.
+	RateLimitEnabled      bool
+	RateLimitIPPerMin     int
+	RateLimitUserPerMin   int
+	RateLimitChatPerMin   int
+	RateLimitSearchPerMin int
 }
 
 // Load reads configuration from the process environment, applying sane defaults
@@ -79,6 +88,12 @@ func Load() *Config {
 
 		MaxCVFileSizeMB:   getEnvInt("MAX_CV_FILE_SIZE_MB", 10),
 		MaxUploadsPerUser: getEnvInt("MAX_UPLOADS_PER_USER", 50),
+
+		RateLimitEnabled:      getEnvBool("RATE_LIMIT_ENABLED", true),
+		RateLimitIPPerMin:     getEnvInt("RATE_LIMIT_IP_PER_MIN", 120),
+		RateLimitUserPerMin:   getEnvInt("RATE_LIMIT_USER_PER_MIN", 90),
+		RateLimitChatPerMin:   getEnvInt("RATE_LIMIT_CHAT_PER_MIN", 15),
+		RateLimitSearchPerMin: getEnvInt("RATE_LIMIT_SEARCH_PER_MIN", 20),
 	}
 }
 
@@ -113,6 +128,15 @@ func getEnvInt(key string, fallback int) int {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback
