@@ -1,6 +1,7 @@
 package http
 
 import (
+	"net"
 	"strings"
 	"time"
 
@@ -37,6 +38,20 @@ func clientIP(c *fiber.Ctx) string {
 	return c.IP()
 }
 
+// ipLimitKey returns the client IP for rate limiting, but ONLY when it is a real
+// routable address. If all we can see is a loopback/private hop (e.g. X-Real-IP
+// didn't propagate), we return "" to SKIP IP limiting rather than collapse every
+// user into one shared bucket and false-trip a global cap. The per-user limiter
+// still applies in that case.
+func ipLimitKey(c *fiber.Ctx) string {
+	ip := clientIP(c)
+	p := net.ParseIP(ip)
+	if p == nil || p.IsLoopback() || p.IsPrivate() || p.IsUnspecified() || p.IsLinkLocalUnicast() {
+		return ""
+	}
+	return ip
+}
+
 // authedUserID is the gateway-validated user id (empty pre-auth → limiter skips).
 func authedUserID(c *fiber.Ctx) string {
 	return strings.TrimSpace(c.Get("X-User-Id"))
@@ -63,7 +78,11 @@ func NewApp(d Deps) *fiber.App {
 	})
 
 	app.Use(recover.New())
-	app.Use(logger.New())
+	// Log the resolved real client IP (X-Real-IP, set by Caddy) alongside the
+	// peer, for observability and to confirm the IP propagation chain.
+	app.Use(logger.New(logger.Config{
+		Format: "${time} | ${status} | ${latency} | peer=${ip} xrip=${header:X-Real-IP} | ${method} | ${path}\n",
+	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     strings.Join(d.Config.CORSAllowedOrigins, ","),
 		AllowMethods:     "GET,POST,PATCH,DELETE,OPTIONS",
@@ -79,7 +98,7 @@ func NewApp(d Deps) *fiber.App {
 	// (after /health) so health checks are never throttled.
 	if cfg.RateLimitEnabled {
 		app.Use(ratelimit.New(d.Redis, ratelimit.Rule{
-			Scope: "ip", Max: cfg.RateLimitIPPerMin, Window: time.Minute, Key: clientIP,
+			Scope: "ip", Max: cfg.RateLimitIPPerMin, Window: time.Minute, Key: ipLimitKey,
 		}))
 	}
 

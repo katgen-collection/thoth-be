@@ -51,3 +51,33 @@ func TestClientIP(t *testing.T) {
 		})
 	}
 }
+
+func TestIPLimitKeySkipsNonPublic(t *testing.T) {
+	app := fiber.New()
+	app.Get("/", func(c *fiber.Ctx) error { return c.SendString("[" + ipLimitKey(c) + "]") })
+
+	cases := []struct {
+		name string
+		xrip string
+		want string // wrapped in [] so empty (skip) is visible
+	}{
+		{"public IP is used", "8.8.8.8", "[8.8.8.8]"},
+		{"loopback is skipped", "127.0.0.1", "[]"},
+		{"private is skipped", "10.0.0.5", "[]"},
+		{"garbage is skipped", "not-an-ip", "[]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(fiber.MethodGet, "/", nil)
+			req.Header.Set("X-Real-IP", tc.xrip)
+			resp, err := app.Test(req)
+			if err != nil {
+				t.Fatalf("app.Test: %v", err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if got := string(body); got != tc.want {
+				t.Errorf("ipLimitKey = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
