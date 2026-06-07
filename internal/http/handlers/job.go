@@ -22,7 +22,9 @@ func NewJobHandler(svc *job.Service) *JobHandler {
 func (h *JobHandler) Register(r fiber.Router) {
 	r.Post("/save", h.save)
 	r.Get("/saved", h.listSaved)
-	r.Patch("/saved/:id/status", h.updateStatus)
+	// PUT, not PATCH: the shared api-gateway's CORS only allows
+	// GET,POST,PUT,DELETE,OPTIONS, so a PATCH preflight is blocked in browsers.
+	r.Put("/saved/:id/status", h.updateStatus)
 	r.Delete("/saved/:id", h.deleteSaved)
 	r.Post("/analyze-url", h.analyzeURL)
 	r.Post("/saved/:id/interview-prep", h.interviewPrep)
