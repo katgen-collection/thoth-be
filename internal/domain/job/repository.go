@@ -78,10 +78,14 @@ func (r *Repository) Get(ctx context.Context, id, userID string) (*SavedJob, err
 // UpdateStatus changes the tracker status. Moving to "applied" stamps
 // applied_at if not already set.
 func (r *Repository) UpdateStatus(ctx context.Context, id, userID, status string) (*SavedJob, error) {
+	// $3 is cast to text at BOTH uses. Without the casts Postgres deduces
+	// conflicting types for the parameter — varchar from `status = $3` vs text
+	// from `$3 = 'applied'` — and rejects the prepared statement with
+	// "inconsistent types deduced for parameter $3" (SQLSTATE 42P08).
 	row := r.pool.QueryRow(ctx,
 		`UPDATE saved_jobs
-		 SET status = $3,
-		     applied_at = CASE WHEN $3 = 'applied' AND applied_at IS NULL THEN now() ELSE applied_at END,
+		 SET status = $3::text,
+		     applied_at = CASE WHEN $3::text = 'applied' AND applied_at IS NULL THEN now() ELSE applied_at END,
 		     updated_at = now()
 		 WHERE id = $1 AND user_id = $2
 		 RETURNING `+columns,
