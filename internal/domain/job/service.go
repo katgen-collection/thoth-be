@@ -40,6 +40,11 @@ func (s *Service) List(ctx context.Context, userID, statusFilter string) ([]Save
 	return s.repo.List(ctx, userID, statusFilter)
 }
 
+// Get returns one saved job the user owns (used to resolve an @-mentioned job).
+func (s *Service) Get(ctx context.Context, id, userID string) (*SavedJob, error) {
+	return s.repo.Get(ctx, id, userID)
+}
+
 // UpdateStatus moves a job along the tracker.
 func (s *Service) UpdateStatus(ctx context.Context, id, userID, status string) (*SavedJob, error) {
 	if !ValidStatus(status) {

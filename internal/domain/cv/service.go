@@ -214,6 +214,12 @@ func (s *Service) AnalyzeDefault(ctx context.Context, userID string) (*CV, error
 	return s.defaultReady(ctx, userID)
 }
 
+// Analyze returns a specific CV the user owns, processing it first if needed
+// (the by-id counterpart of AnalyzeDefault, used when chat targets an @-mentioned CV).
+func (s *Service) Analyze(ctx context.Context, id, userID string) (*CV, error) {
+	return s.ensureReady(ctx, id, userID)
+}
+
 // SuggestEdits proposes tailoring changes for a specific CV against a job.
 func (s *Service) SuggestEdits(ctx context.Context, id, userID, jobDescription string) (ai.CVEdits, error) {
 	c, err := s.ensureReady(ctx, id, userID)

@@ -11,12 +11,19 @@ import (
 	"github.com/katgen/thothai/internal/infra/ai"
 )
 
-// CVService is the subset of cv.Service the chat tools use.
+// CVService is the subset of cv.Service the chat tools use. The *Default methods
+// act on the user's default CV; the by-id methods act on a CV the user
+// @-mentioned for the turn (ToolContext.ActiveCVID), already ownership-checked.
 type CVService interface {
 	AnalyzeDefault(ctx context.Context, userID string) (*cv.CV, error)
 	MatchDefaultToJob(ctx context.Context, userID, jobDescription string) (ai.MatchResult, error)
 	CoverLetterDefault(ctx context.Context, userID, jobDescription string) (string, error)
 	SuggestEditsDefault(ctx context.Context, userID, jobDescription string) (ai.CVEdits, error)
+
+	Analyze(ctx context.Context, id, userID string) (*cv.CV, error)
+	MatchToJob(ctx context.Context, id, userID, jobDescription string) (ai.MatchResult, error)
+	CoverLetter(ctx context.Context, id, userID, jobDescription string) (string, error)
+	SuggestEdits(ctx context.Context, id, userID, jobDescription string) (ai.CVEdits, error)
 }
 
 const noCVMessage = "User belum punya CV yang siap. Minta mereka mengunggah CV dulu."
@@ -43,7 +50,7 @@ func NewCVTools(svc CVService) []Tool {
 				Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
 			},
 			Execute: func(ctx context.Context, tc ToolContext, _ json.RawMessage) (ToolOutcome, error) {
-				c, err := svc.AnalyzeDefault(ctx, tc.UserID)
+				c, err := analyzeCV(ctx, svc, tc)
 				if err != nil {
 					return cvErr(err)
 				}
@@ -66,7 +73,12 @@ func NewCVTools(svc CVService) []Tool {
 				if err != nil {
 					return ToolOutcome{}, err
 				}
-				res, err := svc.MatchDefaultToJob(ctx, tc.UserID, job)
+				var res ai.MatchResult
+				if tc.ActiveCVID != "" {
+					res, err = svc.MatchToJob(ctx, tc.ActiveCVID, tc.UserID, job)
+				} else {
+					res, err = svc.MatchDefaultToJob(ctx, tc.UserID, job)
+				}
 				if err != nil {
 					return cvErr(err)
 				}
@@ -89,7 +101,12 @@ func NewCVTools(svc CVService) []Tool {
 				if err != nil {
 					return ToolOutcome{}, err
 				}
-				letter, err := svc.CoverLetterDefault(ctx, tc.UserID, job)
+				var letter string
+				if tc.ActiveCVID != "" {
+					letter, err = svc.CoverLetter(ctx, tc.ActiveCVID, tc.UserID, job)
+				} else {
+					letter, err = svc.CoverLetterDefault(ctx, tc.UserID, job)
+				}
 				if err != nil {
 					return cvErr(err)
 				}
@@ -111,7 +128,12 @@ func NewCVTools(svc CVService) []Tool {
 				if err != nil {
 					return ToolOutcome{}, err
 				}
-				edits, err := svc.SuggestEditsDefault(ctx, tc.UserID, job)
+				var edits ai.CVEdits
+				if tc.ActiveCVID != "" {
+					edits, err = svc.SuggestEdits(ctx, tc.ActiveCVID, tc.UserID, job)
+				} else {
+					edits, err = svc.SuggestEditsDefault(ctx, tc.UserID, job)
+				}
 				if err != nil {
 					return cvErr(err)
 				}
@@ -124,6 +146,15 @@ func NewCVTools(svc CVService) []Tool {
 			},
 		},
 	}
+}
+
+// analyzeCV returns the CV the turn should act on: the @-mentioned one when set,
+// otherwise the user's default.
+func analyzeCV(ctx context.Context, svc CVService, tc ToolContext) (*cv.CV, error) {
+	if tc.ActiveCVID != "" {
+		return svc.Analyze(ctx, tc.ActiveCVID, tc.UserID)
+	}
+	return svc.AnalyzeDefault(ctx, tc.UserID)
 }
 
 func jobDescriptionArg(args json.RawMessage) (string, error) {

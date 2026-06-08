@@ -105,7 +105,7 @@ func build(ctx context.Context, cfg *config.Config) appDeps {
 	chatTools := []chat.Tool{chat.NewSearchJobsTool(searchSvc)}
 	chatTools = append(chatTools, chat.NewCVTools(cvSvc)...)
 	chatTools = append(chatTools, chat.NewJobTools(jobSvc)...)
-	chatSvc := chat.NewService(chat.NewRepository(pool), deepseek, chatTools)
+	chatSvc := chat.NewService(chat.NewRepository(pool), deepseek, chatTools, cvSvc, jobSvc)
 
 	cleanup := func() {
 		_ = qClient.Close()

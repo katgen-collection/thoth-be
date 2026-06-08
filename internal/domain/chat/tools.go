@@ -14,6 +14,10 @@ import (
 type ToolContext struct {
 	UserID string
 	Emit   func(Event) // forward tool_progress events to the SSE stream
+	// ActiveCVID is set when the user @-mentioned a specific CV for this turn.
+	// CV tools target it instead of the user's default CV. Resolved server-side
+	// and ownership-checked, so it is always one of the user's own CVs.
+	ActiveCVID string
 }
 
 // ToolOutcome is what a tool returns after executing.

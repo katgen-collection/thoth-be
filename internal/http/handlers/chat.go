@@ -93,8 +93,17 @@ func (h *ChatHandler) deleteConversation(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
+// maxReferences caps how many @-mentions a single message may carry.
+const maxReferences = 20
+
+type messageReference struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
 type sendMessageRequest struct {
-	Content string `json:"content"`
+	Content    string             `json:"content"`
+	References []messageReference `json:"references"`
 }
 
 // sendMessage streams the assistant's response (and any tool activity) as SSE.
@@ -125,6 +134,21 @@ func (h *ChatHandler) sendMessage(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Convert @-mention references. The model never sees these raw ids; the chat
+	// service resolves them server-side, scoped to the authenticated user.
+	var refs []chat.Reference
+	if len(req.References) > maxReferences {
+		req.References = req.References[:maxReferences]
+	}
+	for _, r := range req.References {
+		t := strings.TrimSpace(r.Type)
+		id := strings.TrimSpace(r.ID)
+		if id == "" || (t != chat.RefCV && t != chat.RefJob) {
+			continue
+		}
+		refs = append(refs, chat.Reference{Type: t, ID: id})
+	}
+
 	c.Set("Content-Type", "text/event-stream")
 	c.Set("Cache-Control", "no-cache")
 	c.Set("Connection", "keep-alive")
@@ -149,7 +173,7 @@ func (h *ChatHandler) sendMessage(c *fiber.Ctx) error {
 			_ = w.Flush()
 		}
 
-		if err := h.svc.SendMessage(ctx, conversationID, userID, content, emit); err != nil {
+		if err := h.svc.SendMessage(ctx, conversationID, userID, content, refs, emit); err != nil {
 			// SendMessage already emits an error event for stream failures; this
 			// covers setup errors (e.g. context loading) before any frame.
 			emit(chat.Event{Type: "error", Error: err.Error()})
